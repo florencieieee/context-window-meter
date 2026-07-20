@@ -1,0 +1,13 @@
+{
+  "name": "chatgpt-token-usage-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension for real-time ChatGPT context window token usage",
+  "scripts": {
+    "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./styles.css --minify",
+    "watch:css": "npx @tailwindcss/cli -i ./src/input.css -o ./styles.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0",
+    "tailwindcss": "^4.0.0"
+  }
+}
