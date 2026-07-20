@@ -72,12 +72,10 @@
         const obj = JSON.parse(rawJson);
         if (!obj || typeof obj !== 'object') continue;
 
-        // Model metadata detection
         if (obj.type === 'server_ste_metadata' && obj.metadata?.model_slug) {
           modelSlug = obj.metadata.model_slug;
         }
 
-        // Direct input message
         if (obj.input_message) {
           const im = obj.input_message;
           const role = im.author?.role || 'user';
@@ -89,7 +87,6 @@
           }
         }
 
-        // Full message node payload
         const v = obj.v;
         if (v && typeof v === 'object' && v.message) {
           const msg = v.message;
@@ -110,7 +107,6 @@
           }
         }
 
-        // Incremental streaming delta updates
         const o = obj.o;
         const p = obj.p;
         if (o === 'append' && typeof v === 'string') {
@@ -121,7 +117,7 @@
           }
         }
       } catch (e) {
-        // Safe skip invalid chunk JSON
+        // Skip incomplete JSON block
       }
     }
 
@@ -136,6 +132,8 @@
 
     const limit = getContextLimit(modelSlug);
     const percentage = Math.min(100, (totalTokens / limit) * 100);
+
+    console.log(`[ChatGPT Token Tracker] Stream Parsed: ${totalTokens} tokens (${percentage.toFixed(1)}%) for ${modelSlug}`);
 
     window.postMessage(
       {
@@ -154,18 +152,41 @@
     );
   }
 
+  function handleStreamReader(streamReader, url) {
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    function read() {
+      streamReader.read().then(({ done, value }) => {
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          processStreamText(buffer, url);
+        }
+        if (!done) {
+          read();
+        } else {
+          buffer += decoder.decode();
+          processStreamText(buffer, url);
+        }
+      }).catch(err => console.error('[ChatGPT Token Tracker] Stream reader error:', err));
+    }
+
+    read();
+  }
+
   // Intercept fetch
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     const response = await originalFetch.apply(this, args);
 
     try {
-      const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-      if (url.includes('/backend-api/f/conversation/resume') || url.includes('/backend-api/conversation')) {
-        const cloned = response.clone();
-        cloned.text().then(text => {
-          if (text) processStreamText(text, url);
-        }).catch(err => console.error('[ChatGPT Token Tracker] Response text error:', err));
+      const targetUrl = response.url || (typeof args[0] === 'string' ? args[0] : args[0]?.url || '');
+      if (targetUrl.includes('/backend-api/')) {
+        console.log('[ChatGPT Token Tracker] Fetch intercepted:', targetUrl);
+        if (response.body && (targetUrl.includes('conversation') || targetUrl.includes('resume'))) {
+          const streamReader = response.clone().body.getReader();
+          handleStreamReader(streamReader, targetUrl);
+        }
       }
     } catch (err) {
       console.error('[ChatGPT Token Tracker] Fetch intercept error:', err);
@@ -179,9 +200,11 @@
   window.XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this.addEventListener('load', function () {
       try {
-        if (typeof url === 'string' && (url.includes('/backend-api/f/conversation/resume') || url.includes('/backend-api/conversation'))) {
+        const targetUrl = typeof url === 'string' ? url : '';
+        if (targetUrl.includes('/backend-api/') && (targetUrl.includes('conversation') || targetUrl.includes('resume'))) {
+          console.log('[ChatGPT Token Tracker] XHR intercepted:', targetUrl);
           if (this.responseText) {
-            processStreamText(this.responseText, url);
+            processStreamText(this.responseText, targetUrl);
           }
         }
       } catch (err) {

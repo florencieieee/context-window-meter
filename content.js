@@ -174,18 +174,29 @@
     });
   }
 
-  // DOM Fallback Scanner
+  // Enhanced DOM Fallback Scanner
   function scanDOMFallback() {
-    if (currentData && currentData.source === 'Network SSE Stream') return;
+    if (currentData && currentData.source === 'Network SSE Stream' && currentData.totalTokens > 0) return;
 
-    const userEls = document.querySelectorAll('[data-message-author-role="user"]');
-    const assistantEls = document.querySelectorAll('[data-message-author-role="assistant"]');
-
+    const articles = document.querySelectorAll('article');
     let userText = '';
     let assistantText = '';
 
-    userEls.forEach(el => userText += el.innerText + '\n');
-    assistantEls.forEach(el => assistantText += el.innerText + '\n');
+    if (articles.length > 0) {
+      articles.forEach(article => {
+        const isUser = article.querySelector('[data-message-author-role="user"]') || article.getAttribute('data-message-author-role') === 'user' || article.innerText.includes('You said:');
+        if (isUser) {
+          userText += article.innerText + '\n';
+        } else {
+          assistantText += article.innerText + '\n';
+        }
+      });
+    } else {
+      const userEls = document.querySelectorAll('[data-message-author-role="user"], .user-message');
+      const assistantEls = document.querySelectorAll('[data-message-author-role="assistant"], .markdown');
+      userEls.forEach(el => userText += el.innerText + '\n');
+      assistantEls.forEach(el => assistantText += el.innerText + '\n');
+    }
 
     const userTokens = estimateTokens(userText);
     const assistantTokens = estimateTokens(assistantText);
@@ -194,6 +205,8 @@
     if (totalTokens > 0) {
       const limit = 128000;
       const percentage = Math.min(100, (totalTokens / limit) * 100);
+
+      console.log(`[ChatGPT Token Tracker] DOM Scan Fallback: ${totalTokens} tokens (${percentage.toFixed(1)}%) from ${articles.length} articles`);
 
       updateWidgetUI({
         totalTokens,
@@ -223,12 +236,10 @@
     }
   });
 
-  // Initialize widget & fallback scanner
   function init() {
     createWidget();
     scanDOMFallback();
 
-    // DOM mutation observer for dynamically loaded messages
     const observer = new MutationObserver(() => {
       scanDOMFallback();
     });
