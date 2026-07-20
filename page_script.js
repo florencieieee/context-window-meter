@@ -82,6 +82,14 @@
     if (Array.isArray(content.parts)) content.parts.forEach(appendValue);
     appendValue(content.text);
     appendValue(content.result);
+    appendValue(content.content);
+    appendValue(content.summary);
+    appendValue(content.model_set_context);
+    appendValue(content.structured_context);
+    appendValue(content.repo_summary);
+    appendValue(content.repository);
+    appendValue(content.user_instructions);
+    appendValue(content.user_profile);
 
     if (Array.isArray(content.thoughts)) {
       for (const thought of content.thoughts) {
@@ -100,7 +108,9 @@
   }
 
   function getMessageRole(message) {
-    if (message.content?.content_type === 'thoughts') return 'thought';
+    const contentType = message.content?.content_type;
+    if (contentType === 'thoughts' || contentType === 'reasoning_recap') return 'thought';
+    if (contentType === 'model_editable_context') return 'system';
 
     const role = message.author?.role || 'assistant';
     if (role === 'tool' || role === 'system' || role === 'user') return role;
@@ -128,7 +138,22 @@
       thought: ''
     };
 
-    for (const node of Object.values(mapping)) {
+    const activeNodes = [];
+    const visitedNodeIds = new Set();
+    let nodeId = jsonObj.current_node;
+
+    while (nodeId && !visitedNodeIds.has(nodeId)) {
+      const node = mapping[nodeId];
+      if (!node) break;
+      activeNodes.push(node);
+      visitedNodeIds.add(nodeId);
+      nodeId = node.parent;
+    }
+
+    if (activeNodes.length > 0) activeNodes.reverse();
+    else activeNodes.push(...Object.values(mapping));
+
+    for (const node of activeNodes) {
       const msg = node.message;
       if (!msg) continue;
 
@@ -247,12 +272,7 @@
 
   function shouldIntercept(url) {
     if (!url || typeof url !== 'string') return false;
-    return (
-      url.includes('/backend-api/f/conversation/resume') ||
-      url.includes('/backend-api/conversation/resume') ||
-      (url.includes('/backend-api/conversation/') && !url.includes('stream_status') && !url.includes('init')) ||
-      url.endsWith('/backend-api/conversation')
-    );
+    return /^(?:https?:\/\/[^/]+)?\/backend-api\/conversation\/[^/?#]+\/?(?:[?#].*)?$/.test(url);
   }
 
   // Intercept fetch
@@ -265,19 +285,11 @@
       if (shouldIntercept(targetUrl)) {
         console.log('[ChatGPT Token Tracker] Target conversation fetch intercepted:', targetUrl);
 
-        const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('text/event-stream') || targetUrl.includes('resume')) {
-          if (response.body) {
-            const streamReader = response.clone().body.getReader();
-            handleStreamReader(streamReader);
-          }
-        } else {
-          response.clone().json().then(json => {
-            processJsonMapping(json);
-          }).catch(err => {
-            response.clone().text().then(text => processStreamText(text)).catch(() => {});
-          });
-        }
+        response.clone().json().then(json => {
+          processJsonMapping(json);
+        }).catch(err => {
+          console.error('[ChatGPT Token Tracker] Conversation JSON parse error:', err);
+        });
       }
     } catch (err) {
       console.error('[ChatGPT Token Tracker] Fetch intercept error:', err);

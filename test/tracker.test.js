@@ -15,12 +15,12 @@ function waitForStreams() {
   return new Promise(resolve => setTimeout(resolve, 20));
 }
 
-test('parses current conversation resume SSE content', async () => {
-  const responseBody = fs.readFileSync(path.join(projectRoot, 'sample_response.txt'), 'utf8');
+test('parses the conversation detail JSON response instead of resume SSE', async () => {
+  const responseBody = fs.readFileSync(path.join(projectRoot, 'sample_response.json'), 'utf8');
   const updates = [];
   const window = {
     fetch: async () => new Response(responseBody, {
-      headers: { 'content-type': 'text/event-stream' }
+      headers: { 'content-type': 'application/json' }
     }),
     postMessage(message) {
       if (message.type === 'CHATGPT_TOKEN_USAGE_UPDATE') updates.push(message.data);
@@ -37,14 +37,90 @@ test('parses current conversation resume SSE content', async () => {
 
   await window.fetch('https://chatgpt.com/backend-api/f/conversation/resume');
   await waitForStreams();
+  assert.equal(updates.length, 0, 'resume responses should be ignored');
+
+  await window.fetch('https://chatgpt.com/backend-api/conversation/6a5e4247-f128-83eb-a52b-e956275dcc0d');
+  await waitForStreams();
 
   const usage = updates.at(-1);
   assert.ok(usage, 'expected a token usage update');
   assert.equal(usage.modelSlug, 'gpt-5-6-thinking');
+  assert.ok(usage.breakdown.user > 0, 'expected user content');
   assert.ok(usage.breakdown.assistant > 0, 'expected assistant content');
+  assert.equal(typeof usage.breakdown.system, 'number');
   assert.ok(usage.breakdown.tool > 0, 'expected tool content');
   assert.ok(usage.breakdown.thought > 0, 'expected reasoning content');
   assert.equal(usage.limit, 200000);
+});
+
+test('counts only active-branch content across conversation JSON schemas', async () => {
+  const responseBody = JSON.stringify({
+    current_node: 'recap',
+    default_model_slug: 'gpt-5-6-thinking',
+    mapping: {
+      root: { parent: null, children: ['system', 'off-path'] },
+      system: {
+        parent: 'root',
+        children: ['profile'],
+        message: { author: { role: 'system' }, content: { content_type: 'text', parts: ['system context'] } }
+      },
+      profile: {
+        parent: 'system',
+        children: ['recap'],
+        message: {
+          author: { role: 'user' },
+          content: {
+            content_type: 'user_editable_context',
+            user_instructions: 'user instructions',
+            user_profile: 'user profile'
+          }
+        }
+      },
+      recap: {
+        parent: 'profile',
+        children: [],
+        message: {
+          author: { role: 'assistant' },
+          content: { content_type: 'reasoning_recap', content: 'reasoning recap' },
+          metadata: { model_slug: 'gpt-5-6-thinking' }
+        }
+      },
+      'off-path': {
+        parent: 'root',
+        children: [],
+        message: {
+          author: { role: 'assistant' },
+          content: { content_type: 'text', parts: ['must not be counted'] }
+        }
+      }
+    }
+  });
+  const updates = [];
+  const window = {
+    fetch: async () => new Response(responseBody, {
+      headers: { 'content-type': 'application/json' }
+    }),
+    postMessage(message) {
+      if (message.type === 'CHATGPT_TOKEN_USAGE_UPDATE') updates.push(message.data);
+    }
+  };
+  window.window = window;
+
+  runScript('page_script.js', {
+    window,
+    Response,
+    TextDecoder,
+    console: { log() {}, error() {} }
+  });
+
+  await window.fetch('https://chatgpt.com/backend-api/conversation/conversation-id');
+  await waitForStreams();
+
+  const usage = updates.at(-1);
+  assert.ok(usage.breakdown.system > 0);
+  assert.ok(usage.breakdown.user > 0);
+  assert.ok(usage.breakdown.thought > 0);
+  assert.equal(usage.breakdown.assistant, 0);
 });
 
 class FakeElement {

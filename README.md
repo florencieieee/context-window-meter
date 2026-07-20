@@ -3,8 +3,8 @@
 A Chrome Extension (Manifest V3) that calculates and displays real-time context window usage (token count, limit, and percentage) for ChatGPT chats.
 
 ## 🚀 How It Works
-1. **Network Interception**: Intercepts ChatGPT's `/backend-api/f/conversation/resume` and `/backend-api/conversation` SSE (Server-Sent Events) network stream in the main browser context.
-2. **SSE & Delta Parsing**: Real-time parsing of streamed JSON patches, including system messages, user prompts, assistant answers, tool/file search outputs, and reasoning thoughts.
+1. **Network Interception**: Intercepts ChatGPT's `/backend-api/conversation/{conversation_id}` JSON response in the main browser context.
+2. **Conversation Parsing**: Reads the active conversation branch, including system messages, user prompts and profile context, assistant answers, tool/file search outputs, and reasoning thoughts.
 3. **Token Estimation**: Computes precise token counts across message categories using subword BPE token estimation.
 4. **Tailwind Floating Badge**: Displays a clean, dark-mode Tailwind UI badge showing the current token count and percentage of the model's context window. Clicking the badge opens a detailed token breakdown (User, Assistant, Tools/Search, Thoughts, System).
 
