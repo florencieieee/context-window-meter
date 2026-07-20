@@ -3,7 +3,7 @@
 @layer utilities {
   .gpt-token-badge {
     position: fixed;
-    top: 1rem;
+    bottom: 1rem;
     right: 4rem;
     z-index: 999999;
     display: flex;
@@ -35,7 +35,7 @@
   }
   .gpt-token-details-card {
     position: fixed;
-    top: 4rem;
+    bottom: 5rem;
     right: 4rem;
     z-index: 999999;
     width: 20rem;

@@ -15,6 +15,19 @@ function waitForStreams() {
   return new Promise(resolve => setTimeout(resolve, 20));
 }
 
+test('positions the token widget in the bottom-right corner', () => {
+  const css = fs.readFileSync(path.join(projectRoot, 'src/input.css'), 'utf8');
+  const badgeRule = css.match(/\.gpt-token-badge \{([^}]*)\}/)?.[1] || '';
+  const detailsRule = css.match(/\.gpt-token-details-card \{([^}]*)\}/)?.[1] || '';
+
+  assert.match(badgeRule, /bottom:\s*1rem;/);
+  assert.match(badgeRule, /right:\s*4rem;/);
+  assert.doesNotMatch(badgeRule, /top:/);
+  assert.match(detailsRule, /bottom:\s*5rem;/);
+  assert.match(detailsRule, /right:\s*4rem;/);
+  assert.doesNotMatch(detailsRule, /top:/);
+});
+
 test('parses the conversation detail JSON response instead of resume SSE', async () => {
   const responseBody = fs.readFileSync(path.join(projectRoot, 'sample_response.json'), 'utf8');
   const updates = [];
