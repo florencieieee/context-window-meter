@@ -1,19 +1,64 @@
 @import "tailwindcss";
 
-@layer components {
+@layer utilities {
   .gpt-token-badge {
-    @apply fixed top-4 right-16 z-[999999] flex items-center gap-3 px-4 py-2.5 rounded-full bg-slate-900/90 text-slate-100 border border-slate-700/80 shadow-2xl backdrop-blur-xl transition-all duration-300 hover:border-slate-500 hover:scale-105 cursor-pointer font-sans select-none;
+    position: fixed;
+    top: 1rem;
+    right: 4rem;
+    z-index: 999999;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    border-radius: 9999px;
+    background-color: rgba(15, 23, 42, 0.9);
+    color: rgb(241, 245, 249);
+    border: 1px solid rgba(51, 65, 85, 0.8);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(16px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+  }
+  .gpt-token-badge:hover {
+    border-color: rgba(100, 116, 139, 0.8);
+    transform: scale(1.05);
   }
   .gpt-token-ring-container {
-    @apply relative flex items-center justify-center w-8 h-8;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
   }
   .gpt-token-details-card {
-    @apply fixed top-16 right-16 z-[999999] w-80 p-5 rounded-2xl bg-slate-950/95 text-slate-100 border border-slate-800 shadow-2xl backdrop-blur-2xl transition-all duration-300 font-sans space-y-4;
+    position: fixed;
+    top: 4rem;
+    right: 4rem;
+    z-index: 999999;
+    width: 20rem;
+    padding: 1.25rem;
+    border-radius: 1rem;
+    background-color: rgba(2, 6, 23, 0.95);
+    color: rgb(241, 245, 249);
+    border: 1px solid rgba(30, 41, 59, 0.8);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(24px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .gpt-token-progress-bar {
-    @apply w-full h-2 rounded-full bg-slate-800 overflow-hidden;
+    width: 100%;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: rgb(30, 41, 59);
+    overflow: hidden;
   }
   .gpt-token-progress-fill {
-    @apply h-full transition-all duration-500 rounded-full;
+    height: 100%;
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 9999px;
   }
 }

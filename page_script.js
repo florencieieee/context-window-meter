@@ -36,7 +36,79 @@
     return MODEL_CONTEXT_LIMITS['default'];
   }
 
-  function processStreamText(fullText, url) {
+  function dispatchTokenUpdate(textByRole, modelSlug) {
+    let totalTokens = 0;
+    const breakdown = {};
+
+    for (const [role, text] of Object.entries(textByRole)) {
+      const tokens = estimateTokens(text);
+      breakdown[role] = tokens;
+      totalTokens += tokens;
+    }
+
+    if (totalTokens === 0) return;
+
+    const limit = getContextLimit(modelSlug);
+    const percentage = Math.min(100, (totalTokens / limit) * 100);
+
+    console.log(`[ChatGPT Token Tracker] Validated Token Count: ${totalTokens} tokens (${percentage.toFixed(1)}%) for ${modelSlug}`);
+
+    window.postMessage(
+      {
+        type: 'CHATGPT_TOKEN_USAGE_UPDATE',
+        data: {
+          totalTokens,
+          limit,
+          percentage: parseFloat(percentage.toFixed(2)),
+          modelSlug,
+          breakdown,
+          charCount: Object.values(textByRole).reduce((a, b) => a + b.length, 0),
+          updatedAt: new Date().toISOString()
+        }
+      },
+      '*'
+    );
+  }
+
+  function processJsonMapping(jsonObj) {
+    if (!jsonObj || typeof jsonObj !== 'object') return;
+    const mapping = jsonObj.mapping;
+    if (!mapping || typeof mapping !== 'object') return;
+
+    let modelSlug = jsonObj.default_model_slug || 'gpt-4o';
+    const textByRole = {
+      user: '',
+      assistant: '',
+      system: '',
+      tool: '',
+      thought: ''
+    };
+
+    for (const node of Object.values(mapping)) {
+      const msg = node.message;
+      if (!msg) continue;
+
+      const role = msg.author?.role || 'assistant';
+      const targetRole = role === 'tool' ? 'tool' : role === 'system' ? 'system' : role === 'user' ? 'user' : 'assistant';
+      const parts = msg.content?.parts || [];
+
+      if (msg.metadata?.model_slug) {
+        modelSlug = msg.metadata.model_slug;
+      }
+
+      let msgText = '';
+      for (const p of parts) {
+        if (typeof p === 'string') msgText += p;
+        else if (typeof p === 'object') msgText += JSON.stringify(p);
+      }
+
+      textByRole[targetRole] = (textByRole[targetRole] || '') + msgText;
+    }
+
+    dispatchTokenUpdate(textByRole, modelSlug);
+  }
+
+  function processStreamText(fullText) {
     let modelSlug = 'gpt-4o';
     const textByRole = {
       user: '',
@@ -117,42 +189,14 @@
           }
         }
       } catch (e) {
-        // Skip incomplete JSON block
+        // Skip incomplete chunk JSON
       }
     }
 
-    let totalTokens = 0;
-    const breakdown = {};
-
-    for (const [role, text] of Object.entries(textByRole)) {
-      const tokens = estimateTokens(text);
-      breakdown[role] = tokens;
-      totalTokens += tokens;
-    }
-
-    const limit = getContextLimit(modelSlug);
-    const percentage = Math.min(100, (totalTokens / limit) * 100);
-
-    console.log(`[ChatGPT Token Tracker] Stream Parsed: ${totalTokens} tokens (${percentage.toFixed(1)}%) for ${modelSlug}`);
-
-    window.postMessage(
-      {
-        type: 'CHATGPT_TOKEN_USAGE_UPDATE',
-        data: {
-          totalTokens,
-          limit,
-          percentage: parseFloat(percentage.toFixed(2)),
-          modelSlug,
-          breakdown,
-          charCount: Object.values(textByRole).reduce((a, b) => a + b.length, 0),
-          updatedAt: new Date().toISOString()
-        }
-      },
-      '*'
-    );
+    dispatchTokenUpdate(textByRole, modelSlug);
   }
 
-  function handleStreamReader(streamReader, url) {
+  function handleStreamReader(streamReader) {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
 
@@ -160,18 +204,28 @@
       streamReader.read().then(({ done, value }) => {
         if (value) {
           buffer += decoder.decode(value, { stream: true });
-          processStreamText(buffer, url);
+          processStreamText(buffer);
         }
         if (!done) {
           read();
         } else {
           buffer += decoder.decode();
-          processStreamText(buffer, url);
+          processStreamText(buffer);
         }
-      }).catch(err => console.error('[ChatGPT Token Tracker] Stream reader error:', err));
+      }).catch(err => {});
     }
 
     read();
+  }
+
+  function shouldIntercept(url) {
+    if (!url || typeof url !== 'string') return false;
+    return (
+      url.includes('/backend-api/f/conversation/resume') ||
+      url.includes('/backend-api/conversation/resume') ||
+      (url.includes('/backend-api/conversation/') && !url.includes('stream_status') && !url.includes('init')) ||
+      url.endsWith('/backend-api/conversation')
+    );
   }
 
   // Intercept fetch
@@ -181,11 +235,21 @@
 
     try {
       const targetUrl = response.url || (typeof args[0] === 'string' ? args[0] : args[0]?.url || '');
-      if (targetUrl.includes('/backend-api/')) {
-        console.log('[ChatGPT Token Tracker] Fetch intercepted:', targetUrl);
-        if (response.body && (targetUrl.includes('conversation') || targetUrl.includes('resume'))) {
-          const streamReader = response.clone().body.getReader();
-          handleStreamReader(streamReader, targetUrl);
+      if (shouldIntercept(targetUrl)) {
+        console.log('[ChatGPT Token Tracker] Target conversation fetch intercepted:', targetUrl);
+
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('text/event-stream') || targetUrl.includes('resume')) {
+          if (response.body) {
+            const streamReader = response.clone().body.getReader();
+            handleStreamReader(streamReader);
+          }
+        } else {
+          response.clone().json().then(json => {
+            processJsonMapping(json);
+          }).catch(err => {
+            response.clone().text().then(text => processStreamText(text)).catch(() => {});
+          });
         }
       }
     } catch (err) {
@@ -193,24 +257,5 @@
     }
 
     return response;
-  };
-
-  // Intercept XMLHttpRequest
-  const originalXHR = window.XMLHttpRequest.prototype.open;
-  window.XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this.addEventListener('load', function () {
-      try {
-        const targetUrl = typeof url === 'string' ? url : '';
-        if (targetUrl.includes('/backend-api/') && (targetUrl.includes('conversation') || targetUrl.includes('resume'))) {
-          console.log('[ChatGPT Token Tracker] XHR intercepted:', targetUrl);
-          if (this.responseText) {
-            processStreamText(this.responseText, targetUrl);
-          }
-        }
-      } catch (err) {
-        console.error('[ChatGPT Token Tracker] XHR intercept error:', err);
-      }
-    });
-    return originalXHR.apply(this, [method, url, ...rest]);
   };
 })();
