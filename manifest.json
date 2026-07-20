@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Context Window Usage Tracker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Real-time context window token usage counter for ChatGPT chats.",
   "permissions": [
     "storage"
@@ -15,22 +15,22 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "page_script.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
         "content.js"
       ],
       "css": [
         "styles.css"
       ],
       "run_at": "document_start"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "page_script.js"
-      ],
-      "matches": [
-        "https://chatgpt.com/*"
-      ]
     }
   ],
   "action": {

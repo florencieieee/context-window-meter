@@ -2,6 +2,8 @@
   if (window.__chatgpt_token_tracker_injected) return;
   window.__chatgpt_token_tracker_injected = true;
 
+  console.log('[ChatGPT Token Tracker] Injected into MAIN world context.');
+
   const MODEL_CONTEXT_LIMITS = {
     'gpt-5-6-thinking': 200000,
     'gpt-5': 200000,
@@ -18,13 +20,11 @@
   };
 
   function estimateTokens(text) {
-    if (!text) return 0;
-    // BPE token estimation logic:
-    // English words ~ 1.3 tokens per word; code/symbols ~ 1 token per 3 chars
-    const wordMatches = text.match(/\w+/g) || [];
-    const nonWordMatches = text.match(/[^\w\s]+/g) || [];
-    const estimated = Math.ceil(wordMatches.length * 1.3 + nonWordMatches.length * 1.1 + (text.length * 0.05));
-    return Math.max(1, Math.round(estimated));
+    if (!text || typeof text !== 'string') return 0;
+    const words = text.match(/\w+/g) || [];
+    const nonWords = text.match(/[^\w\s]+/g) || [];
+    const estimated = Math.ceil(words.length * 1.3 + nonWords.length * 1.1 + (text.length * 0.05));
+    return Math.max(0, Math.round(estimated));
   }
 
   function getContextLimit(modelSlug) {
@@ -36,11 +36,8 @@
     return MODEL_CONTEXT_LIMITS['default'];
   }
 
-  function processStreamResponse(streamReader, url) {
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
+  function processStreamText(fullText, url) {
     let modelSlug = 'gpt-4o';
-
     const textByRole = {
       user: '',
       assistant: '',
@@ -49,47 +46,18 @@
       thought: ''
     };
 
-    const uniqueMessages = new Map();
+    const uniqueMessages = new Set();
+    const blocks = fullText.split(/\r?\n\r?\n/);
 
-    function updateMetrics() {
-      let totalTokens = 0;
-      const breakdown = {};
-
-      for (const [role, text] of Object.entries(textByRole)) {
-        const tokens = estimateTokens(text);
-        breakdown[role] = tokens;
-        totalTokens += tokens;
-      }
-
-      const limit = getContextLimit(modelSlug);
-      const percentage = Math.min(100, (totalTokens / limit) * 100);
-
-      window.postMessage(
-        {
-          type: 'CHATGPT_TOKEN_USAGE_UPDATE',
-          data: {
-            totalTokens,
-            limit,
-            percentage: parseFloat(percentage.toFixed(2)),
-            modelSlug,
-            breakdown,
-            charCount: Object.values(textByRole).reduce((a, b) => a + b.length, 0),
-            updatedAt: new Date().toISOString()
-          }
-        },
-        '*'
-      );
-    }
-
-    function parseBlock(blockStr) {
-      const lines = blockStr.split('\n').filter(l => !l.startsWith(':'));
-      if (!lines.length) return;
+    for (const blockStr of blocks) {
+      const lines = blockStr.split(/\r?\n/).filter(l => !l.startsWith(':'));
+      if (!lines.length) continue;
 
       const dataLines = [];
       for (const line of lines) {
-        if (line.startswith?.('event:') || line.startsWith('event:')) continue;
+        if (line.startsWith('event:')) continue;
         if (line.startsWith('data: ')) {
-          dataLines.append ? dataLines.append(line.slice(6)) : dataLines.push(line.slice(6));
+          dataLines.push(line.slice(6));
         } else if (line.startsWith('data:')) {
           dataLines.push(line.slice(5));
         } else {
@@ -97,19 +65,19 @@
         }
       }
 
-      const rawJson = dataLines.join('\n').trim();
-      if (!rawJson || rawJson === '[DONE]') return;
+      let rawJson = dataLines.join('\n').trim();
+      if (!rawJson || rawJson === '[DONE]' || rawJson.startsWith('[DONE')) continue;
 
       try {
         const obj = JSON.parse(rawJson);
-        if (!obj || typeof obj !== 'object') return;
+        if (!obj || typeof obj !== 'object') continue;
 
         // Model metadata detection
         if (obj.type === 'server_ste_metadata' && obj.metadata?.model_slug) {
           modelSlug = obj.metadata.model_slug;
         }
 
-        // Direct input message payload
+        // Direct input message
         if (obj.input_message) {
           const im = obj.input_message;
           const role = im.author?.role || 'user';
@@ -121,7 +89,7 @@
           }
         }
 
-        // Full message node payload ('v' key containing message)
+        // Full message node payload
         const v = obj.v;
         if (v && typeof v === 'object' && v.message) {
           const msg = v.message;
@@ -136,13 +104,13 @@
           }
 
           if (msgId && !uniqueMessages.has(msgId)) {
-            uniqueMessages.set(msgId, fullPartText);
+            uniqueMessages.add(msgId);
             const targetRole = role === 'tool' ? 'tool' : role === 'system' ? 'system' : role === 'user' ? 'user' : 'assistant';
             textByRole[targetRole] = (textByRole[targetRole] || '') + fullPartText;
           }
         }
 
-        // Incremental streaming delta updates (append/patch/add)
+        // Incremental streaming delta updates
         const o = obj.o;
         const p = obj.p;
         if (o === 'append' && typeof v === 'string') {
@@ -153,38 +121,40 @@
           }
         }
       } catch (e) {
-        // Ignored parse edge cases
+        // Safe skip invalid chunk JSON
       }
     }
 
-    function readChunks() {
-      streamReader.read().then(({ done, value }) => {
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          // Process completed SSE blocks
-          for (let i = 0; i < parts.length - 1; i++) {
-            parseBlock(parts[i]);
-          }
-          buffer = parts[parts.length - 1];
-          updateMetrics();
-        }
+    let totalTokens = 0;
+    const breakdown = {};
 
-        if (!done) {
-          readChunks();
-        } else {
-          if (buffer.trim()) {
-            parseBlock(buffer);
-            updateMetrics();
-          }
-        }
-      }).catch(err => console.error('[ChatGPT Token Tracker] Stream read error:', err));
+    for (const [role, text] of Object.entries(textByRole)) {
+      const tokens = estimateTokens(text);
+      breakdown[role] = tokens;
+      totalTokens += tokens;
     }
 
-    readChunks();
+    const limit = getContextLimit(modelSlug);
+    const percentage = Math.min(100, (totalTokens / limit) * 100);
+
+    window.postMessage(
+      {
+        type: 'CHATGPT_TOKEN_USAGE_UPDATE',
+        data: {
+          totalTokens,
+          limit,
+          percentage: parseFloat(percentage.toFixed(2)),
+          modelSlug,
+          breakdown,
+          charCount: Object.values(textByRole).reduce((a, b) => a + b.length, 0),
+          updatedAt: new Date().toISOString()
+        }
+      },
+      '*'
+    );
   }
 
-  // Intercept window.fetch
+  // Intercept fetch
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     const response = await originalFetch.apply(this, args);
@@ -192,13 +162,32 @@
     try {
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
       if (url.includes('/backend-api/f/conversation/resume') || url.includes('/backend-api/conversation')) {
-        const streamReader = response.clone().body.getReader();
-        processStreamResponse(streamReader, url);
+        const cloned = response.clone();
+        cloned.text().then(text => {
+          if (text) processStreamText(text, url);
+        }).catch(err => console.error('[ChatGPT Token Tracker] Response text error:', err));
       }
     } catch (err) {
-      console.error('[ChatGPT Token Tracker] Intercept error:', err);
+      console.error('[ChatGPT Token Tracker] Fetch intercept error:', err);
     }
 
     return response;
+  };
+
+  // Intercept XMLHttpRequest
+  const originalXHR = window.XMLHttpRequest.prototype.open;
+  window.XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.addEventListener('load', function () {
+      try {
+        if (typeof url === 'string' && (url.includes('/backend-api/f/conversation/resume') || url.includes('/backend-api/conversation'))) {
+          if (this.responseText) {
+            processStreamText(this.responseText, url);
+          }
+        }
+      } catch (err) {
+        console.error('[ChatGPT Token Tracker] XHR intercept error:', err);
+      }
+    });
+    return originalXHR.apply(this, [method, url, ...rest]);
   };
 })();

@@ -1,16 +1,16 @@
 (function () {
-  // Inject page_script.js into main world to capture fetch stream
-  const script = document.createElement('script');
-  script.src = chrome.runtime.getURL('page_script.js');
-  script.onload = function () {
-    this.remove();
-  };
-  (document.head || document.documentElement).appendChild(script);
-
   let widgetContainer = null;
   let detailsCard = null;
   let isCardOpen = false;
   let currentData = null;
+
+  function estimateTokens(text) {
+    if (!text || typeof text !== 'string') return 0;
+    const words = text.match(/\w+/g) || [];
+    const nonWords = text.match(/[^\w\s]+/g) || [];
+    const estimated = Math.ceil(words.length * 1.3 + nonWords.length * 1.1 + (text.length * 0.05));
+    return Math.max(0, Math.round(estimated));
+  }
 
   function getColorClass(percentage) {
     if (percentage < 50) return { stroke: '#10b981', bg: 'bg-emerald-500', text: 'text-emerald-400', border: 'border-emerald-500/30' };
@@ -115,7 +115,7 @@
           <span class="inline-block w-2.5 h-2.5 rounded-full ${color.bg}"></span>
           <h3 class="text-sm font-bold text-slate-100">Context Window Usage</h3>
         </div>
-        <span class="text-xs px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono">${currentData.modelSlug}</span>
+        <span class="text-xs px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono">${currentData.modelSlug || 'gpt-4o'}</span>
       </div>
 
       <div class="space-y-1.5">
@@ -162,7 +162,7 @@
       </div>
 
       <div class="border-t border-slate-800/80 pt-2 text-[10px] text-slate-500 flex justify-between items-center">
-        <span>Updated real-time via SSE</span>
+        <span>Source: ${currentData.source || 'Network SSE Stream'}</span>
         <button id="gpt-token-close-btn" class="hover:text-slate-300 transition-colors">Close</button>
       </div>
     `;
@@ -174,16 +174,70 @@
     });
   }
 
-  // Listen for messages from main world page_script.js
+  // DOM Fallback Scanner
+  function scanDOMFallback() {
+    if (currentData && currentData.source === 'Network SSE Stream') return;
+
+    const userEls = document.querySelectorAll('[data-message-author-role="user"]');
+    const assistantEls = document.querySelectorAll('[data-message-author-role="assistant"]');
+
+    let userText = '';
+    let assistantText = '';
+
+    userEls.forEach(el => userText += el.innerText + '\n');
+    assistantEls.forEach(el => assistantText += el.innerText + '\n');
+
+    const userTokens = estimateTokens(userText);
+    const assistantTokens = estimateTokens(assistantText);
+    const totalTokens = userTokens + assistantTokens;
+
+    if (totalTokens > 0) {
+      const limit = 128000;
+      const percentage = Math.min(100, (totalTokens / limit) * 100);
+
+      updateWidgetUI({
+        totalTokens,
+        limit,
+        percentage: parseFloat(percentage.toFixed(2)),
+        modelSlug: 'gpt-4o',
+        breakdown: {
+          user: userTokens,
+          assistant: assistantTokens,
+          tool: 0,
+          thought: 0,
+          system: 0
+        },
+        source: 'DOM Scan Fallback',
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  // Listen for real-time SSE network messages
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     if (event.data && event.data.type === 'CHATGPT_TOKEN_USAGE_UPDATE') {
-      updateWidgetUI(event.data.data);
+      const data = event.data.data;
+      data.source = 'Network SSE Stream';
+      updateWidgetUI(data);
     }
   });
 
-  // Fallback initial DOM scan if fetch was missed
-  window.addEventListener('DOMContentLoaded', () => {
+  // Initialize widget & fallback scanner
+  function init() {
     createWidget();
-  });
+    scanDOMFallback();
+
+    // DOM mutation observer for dynamically loaded messages
+    const observer = new MutationObserver(() => {
+      scanDOMFallback();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();
