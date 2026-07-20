@@ -16,7 +16,7 @@ function waitForStreams() {
 }
 
 test('positions the token widget in the bottom-right corner', () => {
-  const css = fs.readFileSync(path.join(projectRoot, 'src/input.css'), 'utf8');
+  const css = fs.readFileSync(path.join(projectRoot, 'styles.css'), 'utf8');
   const badgeRule = css.match(/\.gpt-token-badge \{([^}]*)\}/)?.[1] || '';
   const detailsRule = css.match(/\.gpt-token-details-card \{([^}]*)\}/)?.[1] || '';
 
@@ -29,7 +29,10 @@ test('positions the token widget in the bottom-right corner', () => {
 });
 
 test('parses the conversation detail JSON response instead of resume SSE', async () => {
-  const responseBody = fs.readFileSync(path.join(projectRoot, 'sample_response.json'), 'utf8');
+  const responseBody = fs.readFileSync(
+    path.join(projectRoot, 'test', 'fixtures', 'conversation-sample.json'),
+    'utf8'
+  );
   const updates = [];
   const window = {
     fetch: async () => new Response(responseBody, {

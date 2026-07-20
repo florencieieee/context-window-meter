@@ -1,2 +1,10 @@
 node_modules/
 .DS_Store
+dist/
+.serena/
+
+# Raw ChatGPT API captures — these contain real conversation content and
+# account details. Never commit them; scrub into test/fixtures/ instead.
+sample_response.json
+sample_response.txt
+*.capture.json
