@@ -240,7 +240,12 @@
     createWidget();
     scanDOMFallback();
 
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver(mutations => {
+      const onlyTrackerMutations = mutations.length > 0 && mutations.every(mutation =>
+        widgetContainer?.contains(mutation.target) || detailsCard?.contains(mutation.target)
+      );
+      if (onlyTrackerMutations) return;
+
       scanDOMFallback();
     });
     observer.observe(document.body, { childList: true, subtree: true });

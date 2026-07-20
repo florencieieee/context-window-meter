@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Chrome extension for real-time ChatGPT context window token usage",
   "scripts": {
+    "test": "node --test",
     "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./styles.css --minify",
     "watch:css": "npx @tailwindcss/cli -i ./src/input.css -o ./styles.css --watch"
   },

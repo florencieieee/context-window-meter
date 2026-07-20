@@ -70,6 +70,50 @@
     );
   }
 
+  function extractContentText(content) {
+    if (!content || typeof content !== 'object') return '';
+
+    const text = [];
+    const appendValue = value => {
+      if (typeof value === 'string') text.push(value);
+      else if (value && typeof value === 'object') text.push(JSON.stringify(value));
+    };
+
+    if (Array.isArray(content.parts)) content.parts.forEach(appendValue);
+    appendValue(content.text);
+    appendValue(content.result);
+
+    if (Array.isArray(content.thoughts)) {
+      for (const thought of content.thoughts) {
+        if (typeof thought === 'string') {
+          text.push(thought);
+          continue;
+        }
+        if (!thought || typeof thought !== 'object') continue;
+        appendValue(thought.summary);
+        appendValue(thought.content);
+        if (Array.isArray(thought.chunks)) thought.chunks.forEach(appendValue);
+      }
+    }
+
+    return text.join('\n');
+  }
+
+  function getMessageRole(message) {
+    if (message.content?.content_type === 'thoughts') return 'thought';
+
+    const role = message.author?.role || 'assistant';
+    if (role === 'tool' || role === 'system' || role === 'user') return role;
+    return 'assistant';
+  }
+
+  function getMessageModelSlug(message) {
+    return message.metadata?.model_slug ||
+      message.metadata?.resolved_model_slug ||
+      message.metadata?.default_model_slug ||
+      null;
+  }
+
   function processJsonMapping(jsonObj) {
     if (!jsonObj || typeof jsonObj !== 'object') return;
     const mapping = jsonObj.mapping;
@@ -88,21 +132,11 @@
       const msg = node.message;
       if (!msg) continue;
 
-      const role = msg.author?.role || 'assistant';
-      const targetRole = role === 'tool' ? 'tool' : role === 'system' ? 'system' : role === 'user' ? 'user' : 'assistant';
-      const parts = msg.content?.parts || [];
+      const targetRole = getMessageRole(msg);
+      const messageModelSlug = getMessageModelSlug(msg);
+      if (messageModelSlug) modelSlug = messageModelSlug;
 
-      if (msg.metadata?.model_slug) {
-        modelSlug = msg.metadata.model_slug;
-      }
-
-      let msgText = '';
-      for (const p of parts) {
-        if (typeof p === 'string') msgText += p;
-        else if (typeof p === 'object') msgText += JSON.stringify(p);
-      }
-
-      textByRole[targetRole] = (textByRole[targetRole] || '') + msgText;
+      textByRole[targetRole] += extractContentText(msg.content);
     }
 
     dispatchTokenUpdate(textByRole, modelSlug);
@@ -150,32 +184,23 @@
 
         if (obj.input_message) {
           const im = obj.input_message;
-          const role = im.author?.role || 'user';
-          const parts = im.content?.parts || [];
-          for (const p of parts) {
-            if (typeof p === 'string') {
-              textByRole[role] = (textByRole[role] || '') + p;
-            }
-          }
+          const targetRole = getMessageRole(im);
+          const messageModelSlug = getMessageModelSlug(im);
+          if (messageModelSlug) modelSlug = messageModelSlug;
+          textByRole[targetRole] += extractContentText(im.content);
         }
 
         const v = obj.v;
         if (v && typeof v === 'object' && v.message) {
           const msg = v.message;
-          const role = msg.author?.role || 'assistant';
           const msgId = msg.id;
-          const parts = msg.content?.parts || [];
-
-          let fullPartText = '';
-          for (const p of parts) {
-            if (typeof p === 'string') fullPartText += p;
-            else if (typeof p === 'object') fullPartText += JSON.stringify(p);
-          }
+          const messageModelSlug = getMessageModelSlug(msg);
+          if (messageModelSlug) modelSlug = messageModelSlug;
 
           if (msgId && !uniqueMessages.has(msgId)) {
             uniqueMessages.add(msgId);
-            const targetRole = role === 'tool' ? 'tool' : role === 'system' ? 'system' : role === 'user' ? 'user' : 'assistant';
-            textByRole[targetRole] = (textByRole[targetRole] || '') + fullPartText;
+            const targetRole = getMessageRole(msg);
+            textByRole[targetRole] += extractContentText(msg.content);
           }
         }
 
@@ -187,6 +212,8 @@
           } else if (p === '/message/content/text' || (p && p.includes('/message/content/parts/'))) {
             textByRole.assistant += v;
           }
+        } else if (o === 'append' && p === '/message/content/thoughts' && Array.isArray(v)) {
+          textByRole.thought += extractContentText({ thoughts: v });
         }
       } catch (e) {
         // Skip incomplete chunk JSON
