@@ -69,7 +69,8 @@ test('parses the conversation detail JSON response instead of resume SSE', async
   assert.equal(usage.limit, 200000);
 });
 
-test('counts only active-branch content across conversation JSON schemas', async () => {
+for (const schema of ['mapping', 'messages']) {
+test(`counts only active-branch content in ${schema} responses`, async () => {
   const responseBody = JSON.stringify({
     current_node: 'recap',
     default_model_slug: 'gpt-5-6-thinking',
@@ -111,9 +112,18 @@ test('counts only active-branch content across conversation JSON schemas', async
       }
     }
   });
+  const body = JSON.parse(responseBody);
+  if (schema === 'messages') {
+    body.messages = Object.entries(body.mapping).map(([id, node]) => ({
+      ...node.message,
+      id,
+      parent_id: node.parent
+    }));
+    delete body.mapping;
+  }
   const updates = [];
   const window = {
-    fetch: async () => new Response(responseBody, {
+    fetch: async () => new Response(JSON.stringify(body), {
       headers: { 'content-type': 'application/json' }
     }),
     postMessage(message) {
@@ -138,6 +148,7 @@ test('counts only active-branch content across conversation JSON schemas', async
   assert.ok(usage.breakdown.thought > 0);
   assert.equal(usage.breakdown.assistant, 0);
 });
+}
 
 class FakeElement {
   constructor(tagName) {
@@ -215,4 +226,95 @@ test('ignores DOM mutations made by the tracker widget', () => {
   const widget = elements.get('chatgpt-token-usage-badge');
   observer.callback([{ type: 'childList', target: widget }]);
   assert.equal(fallbackLogs, 1);
+});
+
+test('parses the plural conversations endpoint', async () => {
+  const responseBody = fs.readFileSync(
+    path.join(projectRoot, 'test', 'fixtures', 'conversation-sample.json'),
+    'utf8'
+  );
+
+  const updates = [];
+  const window = {
+    fetch: async () => new Response(responseBody, {
+      headers: { 'content-type': 'application/json' }
+    }),
+    postMessage(message) {
+      if (message.type === 'CHATGPT_TOKEN_USAGE_UPDATE') updates.push(message.data);
+    }
+  };
+  window.window = window;
+
+  runScript('page_script.js', {
+    window,
+    Response,
+    TextDecoder,
+    console: { log() {}, error() {} }
+  });
+
+  await window.fetch(
+    'https://chatgpt.com/backend-api/conversations/conversation-id?include_has_versions=true'
+  );
+  await waitForStreams();
+
+  assert.ok(
+    updates.length > 0,
+    'expected plural /conversations/:id endpoint to produce a token usage update'
+  );
+});
+
+test('parses conversations responses with a messages array', async () => {
+  const responseBody = JSON.stringify({
+    default_model_slug: 'gpt-5-6',
+    current_node: 'message-1',
+    messages: [
+      {
+        id: 'message-1',
+        author: { role: 'assistant' },
+        content: {
+          content_type: 'text',
+          parts: ['A response from the current conversations API schema.']
+        },
+        metadata: {
+          model_slug: 'gpt-5-6',
+          resolved_model_slug: 'gpt-5-6',
+          default_model_slug: 'gpt-5-6'
+        },
+        parent_id: null
+      }
+    ]
+  });
+
+  const updates = [];
+  const window = {
+    fetch: async () => new Response(responseBody, {
+      headers: { 'content-type': 'application/json' }
+    }),
+    postMessage(message) {
+      if (message.type === 'CHATGPT_TOKEN_USAGE_UPDATE') updates.push(message.data);
+    }
+  };
+  window.window = window;
+
+  runScript('page_script.js', {
+    window,
+    Response,
+    TextDecoder,
+    console: { log() {}, error() {} }
+  });
+
+  await window.fetch(
+    'https://chatgpt.com/backend-api/conversations/conversation-id?include_has_versions=true'
+  );
+  await waitForStreams();
+
+  const usage = updates.at(-1);
+
+  assert.ok(
+    usage,
+    'expected messages-array response to produce a token usage update'
+  );
+  assert.equal(usage.modelSlug, 'gpt-5-6');
+  assert.equal(usage.limit, 200000);
+  assert.ok(usage.breakdown.assistant > 0);
 });

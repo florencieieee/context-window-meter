@@ -126,8 +126,6 @@
 
   function processJsonMapping(jsonObj) {
     if (!jsonObj || typeof jsonObj !== 'object') return;
-    const mapping = jsonObj.mapping;
-    if (!mapping || typeof mapping !== 'object') return;
 
     let modelSlug = jsonObj.default_model_slug || 'gpt-4o';
     const textByRole = {
@@ -137,6 +135,42 @@
       tool: '',
       thought: ''
     };
+
+    if (Array.isArray(jsonObj.messages)) {
+      const messagesById = new Map(jsonObj.messages
+        .filter(msg => msg && typeof msg === 'object' && msg.id)
+        .map(msg => [msg.id, msg]));
+      const activeMessages = [];
+      const visitedMessageIds = new Set();
+      let messageId = jsonObj.current_node;
+
+      while (messageId && !visitedMessageIds.has(messageId)) {
+        const msg = messagesById.get(messageId);
+        if (!msg) break;
+        activeMessages.push(msg);
+        visitedMessageIds.add(messageId);
+        messageId = msg.parent_id;
+      }
+
+      if (activeMessages.length > 0) activeMessages.reverse();
+      else activeMessages.push(...jsonObj.messages);
+
+      for (const msg of activeMessages) {
+        if (!msg || typeof msg !== 'object') continue;
+
+        const targetRole = getMessageRole(msg);
+        const messageModelSlug = getMessageModelSlug(msg);
+        if (messageModelSlug) modelSlug = messageModelSlug;
+
+        textByRole[targetRole] += extractContentText(msg.content);
+      }
+
+      dispatchTokenUpdate(textByRole, modelSlug);
+      return;
+    }
+
+    const mapping = jsonObj.mapping;
+    if (!mapping || typeof mapping !== 'object') return;
 
     const activeNodes = [];
     const visitedNodeIds = new Set();
@@ -272,7 +306,7 @@
 
   function shouldIntercept(url) {
     if (!url || typeof url !== 'string') return false;
-    return /^(?:https?:\/\/[^/]+)?\/backend-api\/conversation\/[^/?#]+\/?(?:[?#].*)?$/.test(url);
+    return /^(?:https?:\/\/[^/]+)?\/backend-api\/conversations?\/[^/?#]+\/?(?:[?#].*)?$/.test(url);
   }
 
   // Intercept fetch
