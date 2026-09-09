@@ -20,9 +20,12 @@
 
   function estimateTokens(text) {
     if (!text || typeof text !== 'string') return 0;
+    // Keep the same Han-character approximation as the network parser.
+    const hanCount = (text.match(/\p{Script=Han}/gu) || []).length;
+    text = text.replace(/\p{Script=Han}/gu, ' ');
     const words = text.match(/\w+/g) || [];
     const nonWords = text.match(/[^\w\s]+/g) || [];
-    const estimated = Math.ceil(words.length * 1.3 + nonWords.length * 1.1 + (text.length * 0.05));
+    const estimated = hanCount + Math.ceil(words.length * 1.3 + nonWords.length * 1.1 + ((text.length - hanCount) * 0.05));
     return Math.max(0, Math.round(estimated));
   }
 
@@ -164,22 +167,25 @@
     const color = getStateColor(data.percentage);
 
     if (ringPath) {
-      ringPath.setAttribute('stroke-dasharray', `${data.percentage}, 100`);
+      ringPath.setAttribute('stroke-dasharray', `${data.percentage ?? 0}, 100`);
       ringPath.setAttribute('stroke', color);
     }
 
     if (pctText) {
-      pctText.innerText = `${Math.round(data.percentage)}%`;
+      pctText.innerText = data.limit ? `${Math.round(data.percentage)}%` : '?';
     }
 
     if (countText) {
-      countText.innerText = `${formatNumber(data.totalTokens)} / ${formatCompact(data.limit)}`;
+      countText.innerText = data.limit ? `${formatNumber(data.totalTokens)} / ${formatCompact(data.limit)}${data.limitSource === 'api-reference' ? ' ref.' : ''}` : `${formatNumber(data.totalTokens)} / unknown`;
     }
 
     widgetContainer.setAttribute(
       'aria-label',
-      `Context window ${Math.round(data.percentage)} percent used, ${formatNumber(data.totalTokens)} of ${formatNumber(data.limit)} tokens.`
+      data.limit ? `Context window ${Math.round(data.percentage)} percent used, ${formatNumber(data.totalTokens)} of ${formatNumber(data.limit)} tokens.` : `${formatNumber(data.totalTokens)} estimated tokens. Context limit unknown.`
     );
+    if (data.limitSource === 'api-reference') {
+      widgetContainer.setAttribute('aria-label', `${formatNumber(data.totalTokens)} estimated tokens against an API reference limit of ${formatNumber(data.limit)}. ChatGPT allowance may differ.`);
+    }
 
     if (isCardOpen) {
       renderDetailsCard();
@@ -251,15 +257,16 @@
       </div>
 
       <div class="gpt-token-headline">
-        <span class="gpt-token-headline-pct" style="color: ${color};">${Math.round(currentData.percentage)}%</span>
-        <span class="gpt-token-headline-note">used</span>
+        <span class="gpt-token-headline-pct" style="color: ${color};">${currentData.limit ? Math.round(currentData.percentage) + '%' : '?'}</span>
+        <span class="gpt-token-headline-note">${currentData.limitSource === 'api-reference' ? 'of API reference (estimated)' : currentData.limit ? 'used' : 'Context limit unknown'}</span>
       </div>
       <div class="gpt-token-headline-sub">
-        ${formatNumber(currentData.totalTokens)} of ${formatNumber(currentData.limit)} tokens · ${formatNumber(remainingTokens)} left
+        ${currentData.limitSource === 'api-reference' ? `${formatNumber(currentData.totalTokens)} estimated tokens · ${formatNumber(remainingTokens)} to reference limit` : currentData.limit ? `${formatNumber(currentData.totalTokens)} of ${formatNumber(currentData.limit)} tokens · ${formatNumber(remainingTokens)} left` : `${formatNumber(currentData.totalTokens)} estimated tokens · ChatGPT limit not verified`}
       </div>
+      ${currentData.limitSource === 'api-reference' ? '<p class="gpt-token-headline-sub">API reference: 1,050,000 tokens. ChatGPT allowance may differ.</p>' : ''}
 
       <div class="gpt-token-bar">
-        ${renderSegments(breakdown, currentData.limit)}
+        ${currentData.limit ? renderSegments(breakdown, currentData.limit) : ''}
       </div>
 
       <div class="gpt-token-legend">

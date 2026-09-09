@@ -21,19 +21,26 @@
 
   function estimateTokens(text) {
     if (!text || typeof text !== 'string') return 0;
+    // Approximate Han characters individually instead of collapsing a whole
+    // Chinese sentence into one non-word run. This is not a model tokenizer.
+    const hanCount = (text.match(/\p{Script=Han}/gu) || []).length;
+    text = text.replace(/\p{Script=Han}/gu, ' ');
     const words = text.match(/\w+/g) || [];
     const nonWords = text.match(/[^\w\s]+/g) || [];
-    const estimated = Math.ceil(words.length * 1.3 + nonWords.length * 1.1 + (text.length * 0.05));
+    const estimated = hanCount + Math.ceil(words.length * 1.3 + nonWords.length * 1.1 + ((text.length - hanCount) * 0.05));
     return Math.max(0, Math.round(estimated));
   }
 
   function getContextLimit(modelSlug) {
-    if (!modelSlug) return MODEL_CONTEXT_LIMITS['default'];
+    if (!modelSlug) return null;
     const slug = modelSlug.toLowerCase();
+    // API reference only; the ChatGPT web allowance is not verified.
+    // https://developers.openai.com/api/docs/models/gpt-6-astra
+    if (/^gpt-6-astra(?:-|$)/.test(slug)) return 1050000;
     for (const [key, limit] of Object.entries(MODEL_CONTEXT_LIMITS)) {
       if (slug.includes(key)) return limit;
     }
-    return MODEL_CONTEXT_LIMITS['default'];
+    return null;
   }
 
   function dispatchTokenUpdate(textByRole, modelSlug) {
@@ -49,9 +56,9 @@
     if (totalTokens === 0) return;
 
     const limit = getContextLimit(modelSlug);
-    const percentage = Math.min(100, (totalTokens / limit) * 100);
+    const percentage = limit ? Math.min(100, (totalTokens / limit) * 100) : null;
 
-    console.log(`[ChatGPT Token Tracker] Validated Token Count: ${totalTokens} tokens (${percentage.toFixed(1)}%) for ${modelSlug}`);
+    console.log(`[ChatGPT Token Tracker] Validated Token Count: ${totalTokens} tokens (${percentage === null ? 'limit unknown' : percentage.toFixed(1) + '%'}) for ${modelSlug}`);
 
     window.postMessage(
       {
@@ -59,7 +66,8 @@
         data: {
           totalTokens,
           limit,
-          percentage: parseFloat(percentage.toFixed(2)),
+          limitSource: /^gpt-6-astra(?:-|$)/i.test(modelSlug) ? 'api-reference' : null,
+          percentage: percentage === null ? null : parseFloat(percentage.toFixed(2)),
           modelSlug,
           breakdown,
           charCount: Object.values(textByRole).reduce((a, b) => a + b.length, 0),
@@ -142,7 +150,10 @@
         .map(msg => [msg.id, msg]));
       const activeMessages = [];
       const visitedMessageIds = new Set();
-      let messageId = jsonObj.current_node;
+      // Flat responses omit parent links; count the supplied messages in that case.
+      const hasParentLinks = [...messagesById.values()].some(msg =>
+        Object.prototype.hasOwnProperty.call(msg, 'parent_id'));
+      let messageId = hasParentLinks ? jsonObj.current_node : null;
 
       while (messageId && !visitedMessageIds.has(messageId)) {
         const msg = messagesById.get(messageId);

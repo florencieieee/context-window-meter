@@ -6,6 +6,50 @@ const vm = require('node:vm');
 
 const projectRoot = path.resolve(__dirname, '..');
 
+test('counts every supplied message when parent links are absent and labels the Astra API reference', async () => {
+  const messages = [
+    { id: 'user', author: { role: 'user' }, content: { parts: ['A synthetic question.'] } },
+    { id: 'answer', author: { role: 'assistant' }, content: { parts: ['A synthetic answer.'] }, metadata: { model_slug: 'gpt-6-astra-wm' } }
+  ];
+  const updates = [];
+  const window = {
+    fetch: async () => new Response(JSON.stringify({ messages, current_node: 'answer', default_model_slug: 'gpt-6-astra-wm' })),
+    postMessage: message => updates.push(message.data)
+  };
+  runScript('page_script.js', { window, Response, TextDecoder, console: { log() {}, error() {} } });
+  await window.fetch('https://chatgpt.com/backend-api/conversations/synthetic');
+  await waitForStreams();
+  const usage = updates.at(-1);
+  assert.equal(usage.modelSlug, 'gpt-6-astra-wm');
+  assert.equal(usage.charCount, messages.reduce((n, m) => n + m.content.parts[0].length, 0));
+  assert.ok(usage.breakdown.user > 0);
+  assert.ok(usage.breakdown.assistant > 0);
+  assert.equal(usage.limit, 1050000);
+  assert.equal(usage.limitSource, 'api-reference');
+  assert.equal(typeof usage.percentage, 'number');
+});
+
+test('Chinese estimates grow with character count without changing English estimates', async () => {
+  const updates = [];
+  let text = '你好'.repeat(100);
+  const window = {
+    fetch: async () => new Response(JSON.stringify({ messages: [
+      { author: { role: 'user' }, content: { parts: [text] } }
+    ], default_model_slug: 'unlisted-model' })),
+    postMessage: message => updates.push(message.data)
+  };
+  runScript('page_script.js', { window, Response, TextDecoder, console: { log() {}, error() {} } });
+  for (const value of [text, text.repeat(2), 'Hello world']) {
+    text = value;
+    await window.fetch('https://chatgpt.com/backend-api/conversations/synthetic');
+    await waitForStreams();
+  }
+  assert.equal(updates[0].totalTokens, 200);
+  assert.equal(updates[1].totalTokens, 400);
+  assert.equal(updates[2].totalTokens, 4);
+  assert.equal(updates[0].limit, null);
+});
+
 function runScript(filename, globals) {
   const source = fs.readFileSync(path.join(projectRoot, filename), 'utf8');
   vm.runInNewContext(source, globals, { filename });
@@ -14,6 +58,47 @@ function runScript(filename, globals) {
 function waitForStreams() {
   return new Promise(resolve => setTimeout(resolve, 20));
 }
+
+test('unknown limits render without a fabricated percentage or remaining count', () => {
+  const elements = new Map();
+  const makeElement = () => ({
+    innerHTML: '', innerText: '', attributes: {}, listeners: {},
+    classList: { add() {}, remove() {} },
+    setAttribute(key, value) { this.attributes[key] = value; },
+    addEventListener(key, callback) { this.listeners[key] = callback; },
+    contains() { return false; }
+  });
+  for (const id of ['gpt-token-ring-path', 'gpt-token-pct-text', 'gpt-token-count-text']) elements.set(id, makeElement());
+  const document = {
+    readyState: 'complete',
+    body: { appendChild(element) { elements.set(element.id, element); } },
+    createElement: makeElement,
+    getElementById: id => elements.get(id),
+    addEventListener() {}, querySelectorAll: () => []
+  };
+  const listeners = {};
+  const window = { addEventListener: (type, handler) => { listeners[type] = handler; } };
+  runScript('content.js', { window, document, Intl,
+    MutationObserver: class { observe() {} }, console: { log() {} } });
+  listeners.message({ source: window, data: { type: 'CHATGPT_TOKEN_USAGE_UPDATE', data: {
+    modelSlug: 'gpt-6-astra-wm', totalTokens: 42, limit: null, percentage: null, breakdown: { user: 42 }
+  } } });
+  elements.get('chatgpt-token-usage-badge').listeners.click({ stopPropagation() {} });
+  assert.equal(elements.get('gpt-token-pct-text').innerText, '?');
+  assert.equal(elements.get('gpt-token-count-text').innerText, '42 / unknown');
+  const html = elements.get('chatgpt-token-usage-details').innerHTML;
+  assert.match(html, /Context limit unknown/);
+  assert.match(html, /gpt-6-astra-wm/);
+  assert.doesNotMatch(html, /NaN|Infinity|tokens · .* left/);
+  listeners.message({ source: window, data: { type: 'CHATGPT_TOKEN_USAGE_UPDATE', data: {
+    modelSlug: 'gpt-6-astra-wm', totalTokens: 42, limit: 1050000, limitSource: 'api-reference', percentage: 0, breakdown: { user: 42 }
+  } } });
+  const referenceHtml = elements.get('chatgpt-token-usage-details').innerHTML;
+  assert.match(referenceHtml, /API reference: 1,050,000/);
+  assert.match(referenceHtml, /ChatGPT allowance may differ/);
+  assert.match(elements.get('gpt-token-count-text').innerText, /ref\./);
+  assert.doesNotMatch(referenceHtml, /tokens · .* left/);
+});
 
 test('positions the token widget in the bottom-right corner', () => {
   const css = fs.readFileSync(path.join(projectRoot, 'styles.css'), 'utf8');
